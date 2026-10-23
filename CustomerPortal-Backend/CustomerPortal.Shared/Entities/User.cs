@@ -40,5 +40,7 @@ namespace CustomerPortal.Shared.Entities
 
         [Display(Name = "User")]
         public string FullName => $"{FirstName} {LastName}";
+        public ICollection<RefreshToken> RefreshTokens { get; set; }
+        = new List<RefreshToken>();
     }
 }

@@ -1,4 +1,5 @@
-﻿using CustomerPortal.Backend.Data;
+﻿using System.Security.Cryptography;
+using CustomerPortal.Backend.Data;
 using CustomerPortal.Backend.Helpers;
 using CustomerPortal.Backend.UnitsOfWork.Interfaces;
 using CustomerPortal.Shared.DTOs;
@@ -214,7 +215,10 @@ namespace CustomerPortal.Backend.Controllers
             {
                 var user = await _usersUnitOfWork.GetUserAsync(model.Email)
                     ?? await _context.Users.FirstOrDefaultAsync(u => u.PhoneNumber == model.Email); ;
-                return Ok(BuildToken(user!));
+
+                var tokenDTO = BuildToken(user!);
+                await _context.SaveChangesAsync();
+                return Ok(tokenDTO);
             }
 
             if (result.IsLockedOut)
@@ -240,13 +244,13 @@ namespace CustomerPortal.Backend.Controllers
                 new("FirstName", user.FirstName),
                 new("LastName", user.LastName),
                 new("Address", user.Address),
-                new("Photo", user.Photo ?? string.Empty),
-                
-
+                new("Photo", user.Photo ?? string.Empty),               
             };
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["jwtKey"]!));
             var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-            var expiration = DateTime.Now.AddDays(7);
+
+
+            var expiration = DateTime.Now.AddMinutes(1);
             var token = new JwtSecurityToken
             (
                issuer: null,
@@ -255,12 +259,69 @@ namespace CustomerPortal.Backend.Controllers
                expires: expiration,
                signingCredentials: credentials
             );
+
+            var refreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+
+            _context.RefreshTokens.Add(new RefreshToken
+            {
+                TokenHash = Hash(refreshToken),
+                UserId=user.Id,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+
+            });
             return new TokenDTO
             {
                 Token = new JwtSecurityTokenHandler().WriteToken(token),
                 Expiration = expiration,
+                RefreshToken = refreshToken,
 
             };
+        }
+        private static string Hash(string token) =>
+          Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+        [HttpPost("Refresh")]
+        public async Task<IActionResult> RefreshAsync([FromBody] RefreshRequestDTO model)
+        {
+            var hash = Hash(model.RefreshToken);
+
+            var stored = await _context.RefreshTokens
+                .Include(r => r.User)
+                .FirstOrDefaultAsync(r => r.TokenHash == hash);
+
+            if (stored == null) return Unauthorized();            
+            if (stored.RevokedAt != null)
+            {
+                await RevokeAllUserTokensAsync(stored.UserId);
+                return Unauthorized();
+            }
+            if (stored.ExpiresAt <= DateTime.UtcNow) return Unauthorized();
+            if (!stored.User.EmailConfirmed) return Unauthorized();
+            if (stored.User.LockoutEnd != null && stored.User.LockoutEnd > DateTimeOffset.UtcNow)
+                return Unauthorized();
+
+            await using var tx = await _context.Database.BeginTransactionAsync();
+          
+            var rows = await _context.RefreshTokens
+                .Where(r => r.Id == stored.Id && r.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTime.UtcNow));
+
+            if (rows == 0) return Unauthorized(); 
+
+            var newToken = BuildToken(stored.User);       
+            stored.ReplacedByTokenHash = Hash(newToken.RefreshToken);
+
+            await _context.SaveChangesAsync();             
+            await tx.CommitAsync();
+
+            return Ok(newToken);
+        }
+        private async Task RevokeAllUserTokensAsync(string userId)
+        {
+            await _context.RefreshTokens
+                .Where(r => r.UserId == userId && r.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTime.UtcNow));
         }
         [HttpGet]
         [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
@@ -298,7 +359,9 @@ namespace CustomerPortal.Backend.Controllers
                 var result = await _usersUnitOfWork.UpdateUserAsync(currentUser);
                 if (result.Succeeded)
                 {
-                    return Ok(BuildToken(currentUser));
+                    var tokenDto = BuildToken(currentUser);
+                    await _context.SaveChangesAsync();
+                    return Ok(tokenDto);
                 }
 
                 return BadRequest(result.Errors.FirstOrDefault());
@@ -308,6 +371,23 @@ namespace CustomerPortal.Backend.Controllers
 
                 return BadRequest(ex.Message);
             }
+        }
+
+        [HttpPost("Logout")]
+        public async Task<IActionResult> LogoutAsync([FromBody] RefreshRequestDTO model)
+        {
+            var hash = Hash(model.RefreshToken);
+
+            var stored = await _context.RefreshTokens
+                .FirstOrDefaultAsync(r => r.TokenHash == hash);
+
+            if (stored != null && stored.RevokedAt == null)
+            {
+                stored.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+           
+            return NoContent();
         }
     }
 }
