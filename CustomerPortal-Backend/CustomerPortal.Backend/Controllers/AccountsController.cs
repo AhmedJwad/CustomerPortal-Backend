@@ -1,0 +1,427 @@
+﻿using System.Security.Cryptography;
+using CustomerPortal.Backend.Data;
+using CustomerPortal.Backend.Helpers;
+using CustomerPortal.Backend.UnitsOfWork.Interfaces;
+using CustomerPortal.Shared.DTOs;
+using CustomerPortal.Shared.Entities;
+using CustomerPortal.Shared.Responses;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using CustomerPortal.Shared.Enums;
+
+namespace CustomerPortal.Backend.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class AccountsController : ControllerBase
+    {
+        private readonly DataContext _context;
+        private readonly IUsersUnitOfWork _usersUnitOfWork;
+        private readonly IConfiguration _configuration;
+        private readonly IFileStorage _fileStorage;
+        private readonly IMailHelper _mailHelper;
+
+        public AccountsController(DataContext context, IUsersUnitOfWork usersUnitOfWork, IConfiguration configuration,
+           IFileStorage fileStorage, IMailHelper mailHelper)
+        {
+            _context = context;
+            _usersUnitOfWork = usersUnitOfWork;
+            _configuration = configuration;
+            _fileStorage = fileStorage;
+            _mailHelper = mailHelper;
+        }
+        [HttpGet("recordsNumber")]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = "Admin")]
+        public async Task<IActionResult> GetRecordsNumberAsync([FromQuery] PaginationDTO pagination)
+        {
+            var response = await _usersUnitOfWork.GetRecordsNumberAsync(pagination);
+            if (response.WasSuccess)
+            {
+                return Ok(response.Result);
+            }
+            return BadRequest();
+        }
+        [HttpGet("all")]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = "Admin")]
+        public async Task<IActionResult> GetAsync([FromQuery] PaginationDTO pagination)
+        {
+            var response = await _usersUnitOfWork.GetAsync(pagination);
+            if (response.WasSuccess)
+            {
+                return Ok(response.Result);
+            }
+            return BadRequest();
+        }
+        [HttpGet("totalPages")]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = "Admin")]
+        public async Task<IActionResult> GetPagesAsync(PaginationDTO pagination)
+        {
+            var response = await _usersUnitOfWork.GetTotalPagesAsync(pagination);
+            if (response.WasSuccess)
+            {
+                return Ok(response.Result);
+            }
+            return BadRequest();
+        }
+        [HttpPost("RecoverPassword")]
+        public async Task<IActionResult> RecoverPasswordAsync([FromBody] EmailDTO model)
+        {
+            var user = await _usersUnitOfWork.GetUserAsync(model.Email);
+            if (user == null)
+            {
+                return NotFound();
+            }
+            var myToken = await _usersUnitOfWork.GeneratePasswordResetTokenAsync(user);
+            //var tokenLink = Url.Action("ResetPassword", "accounts",
+            //new
+            //{
+            //    userid = user.Id,
+            //    token = myToken,
+            //}, HttpContext.Request.Scheme, _configuration["Url Frontend"]);
+            var tokenLink =$"{_configuration["Url Frontend"]}/reset-password" +
+                          $"?email={Uri.EscapeDataString(user.Email!)}&token={Uri.EscapeDataString(myToken)}";
+
+            var response = _mailHelper.SendMail(user.FullName, user.Email!,
+               $"customer-portal - Password Recovery",
+               $"<h1>customer-portal - Password Recovery</h1>" +
+               $"<p>To recover your password, please click 'Recover Password'':</p>" +
+               $"<b><a href ={tokenLink}>Recover Password</a></b>");
+
+            if (response.WasSuccess)
+            {
+                return NoContent();
+            }
+            return BadRequest(response.Message);
+        }
+
+        [HttpPost("ResetPassword")]
+        public async Task<IActionResult> ResetPasswordAsync([FromBody] ResetPasswordDTO model)
+        {
+            var user = await _usersUnitOfWork.GetUserAsync(model.Email);
+            if (user == null)
+            {
+                return NotFound();
+            }
+            var result = await _usersUnitOfWork.ResetPasswordAsync(user, model.Token, model.Password);
+            if (result.Succeeded)
+            {
+                return NoContent();
+            }
+            return BadRequest(result.Errors.FirstOrDefault()!.Description);
+        }
+        [HttpPost("ResedToken")]
+        public async Task<IActionResult> ResedTokenAsync([FromBody] EmailDTO model)
+        {
+            var user = await _usersUnitOfWork.GetUserAsync(model.Email);
+            if (user == null)
+            {
+                return NotFound();
+            }
+
+            var response = await SendConfirmationEmailAsync(user);
+            if (response.WasSuccess)
+            {
+                return NoContent();
+            }
+
+            return BadRequest(response.Message);
+        }
+
+        private async Task<ActionResponse<string>> SendConfirmationEmailAsync(User user)
+        {
+            var myToken = await _usersUnitOfWork.GenerateEmailConfirmationTokenAsync(user);
+            //var tokenLink = Url.Action("ConfirmEmail", "accounts", new
+            //{
+            //    userid = user.Id,
+            //    token = myToken
+            //}, HttpContext.Request.Scheme, _configuration["Url Frontend"]);
+            var tokenLink = $"{_configuration["Url Frontend"]}/confirm-email" +
+                        $"?userId={user.Id}&token={Uri.EscapeDataString(myToken)}";
+
+            return _mailHelper.SendMail(user.FullName, user.Email!,
+                $"customer-portal - Account Confirmation",
+                $"<h1>customer-portal - Account Confirmation</h1>" +
+                $"<p>To enable the user, please click 'Confirm Email':</p>" +
+                $"<b><a href ={tokenLink}>Confirm Email</a></b>");
+
+        }
+
+        [HttpGet("ConfirmEmail")]
+        public async Task<IActionResult> ConfirmEmailAsync(string userId, string token)
+        {
+            token = token.Replace(" ", "+");
+            var user = await _usersUnitOfWork.GetUserAsync(new Guid(userId));
+            if (user == null)
+            {
+                return NotFound();
+            }
+            var result = await _usersUnitOfWork.ConfirmEmailAsync(user, token);
+            if (!result.Succeeded)
+            {
+                return BadRequest(result.Errors.FirstOrDefault()!.Description);
+            }
+            return NoContent();
+        }
+        //TODO:
+        [HttpPost("CreateUser")]
+        public async Task<IActionResult> CreateUser([FromBody] UserDTO model)
+        {
+            User user = model;
+            if (!string.IsNullOrEmpty(model.Photo))
+            {
+                var photoUser = Convert.FromBase64String(model.Photo);
+                model.Photo = await _fileStorage.SaveFileAsync(photoUser, ".jpg", "users");
+            }
+            user.UserType = UserType.User;
+            var result = await _usersUnitOfWork.AddUserAsync(user, model.Password);
+            if (result.Succeeded)
+            {
+                await _usersUnitOfWork.AddUserToRoleAsync(user, user.UserType.ToString());
+                var response = await SendConfirmationEmailAsync(user);
+                if (response.WasSuccess)
+                {
+                    return NoContent();
+                }
+                return BadRequest(response.Message);
+            }
+            return BadRequest(result.Errors.FirstOrDefault());
+        }
+
+        [HttpPost("CreateAdmin")]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = "Admin")]
+        public async Task<IActionResult> CreateAdmin([FromBody] UserDTO model)
+        {
+            User user = model;
+            if (!string.IsNullOrEmpty(model.Photo))
+            {
+                var photoUser = Convert.FromBase64String(model.Photo);
+                model.Photo = await _fileStorage.SaveFileAsync(photoUser, ".jpg", "users");
+            }
+            user.UserType = UserType.Admin;
+            var result = await _usersUnitOfWork.AddUserAsync(user, model.Password);
+            if (result.Succeeded)
+            {
+                await _usersUnitOfWork.AddUserToRoleAsync(user, user.UserType.ToString());
+                var response = await SendConfirmationEmailAsync(user);
+                if (response.WasSuccess)
+                {
+                    return NoContent();
+                }
+                return BadRequest(response.Message);
+            }
+            return BadRequest(result.Errors.FirstOrDefault());
+        }
+        [HttpPost("changePassword")]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+        public async Task<IActionResult> ChangePasswordAsync(ChangePasswordDTO model)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var user = await _usersUnitOfWork.GetUserAsync(User.Identity!.Name!);
+            if (user == null)
+            {
+                return NotFound();
+            }
+
+            var result = await _usersUnitOfWork.ChangePasswordAsync(user, model.CurrentPassword, model.NewPassword);
+            if (!result.Succeeded)
+            {
+                return BadRequest(result.Errors.FirstOrDefault()!.Description);
+            }
+            await RevokeAllUserTokensAsync(user.Id);
+            return NoContent();
+        }
+        [HttpPost("Login")]
+        public async Task<IActionResult> LoginAsync([FromBody] LoginDTO model)
+        {
+            var result = await _usersUnitOfWork.LoginAsync(model);
+            if (result.Succeeded)
+            {
+                var user = await _usersUnitOfWork.GetUserAsync(model.Email)
+                    ?? await _context.Users.FirstOrDefaultAsync(u => u.PhoneNumber == model.Email); ;
+
+                var tokenDTO = BuildToken(user!);
+                await _context.SaveChangesAsync();
+                return Ok(tokenDTO);
+            }
+
+            if (result.IsLockedOut)
+            {
+                return BadRequest("You have exceeded the maximum number of attempts, your account is blocked, please try again in 5 minutes.");
+            }
+
+            if (result.IsNotAllowed)
+            {
+                return BadRequest("The user has not been enabled, you must follow the instructions in the email sent to enable the user.");
+            }
+
+            return BadRequest("Incorrect email or password.");
+        }
+
+        private TokenDTO BuildToken(User user)
+        {
+            var claims = new List<Claim>
+            {
+                new(ClaimTypes.Name, user.Email!),
+                new Claim(ClaimTypes.Role, user.UserType.ToString()),
+                new Claim(ClaimTypes.MobilePhone, user.PhoneNumber!),
+                new("FirstName", user.FirstName),
+                new("LastName", user.LastName),
+                new("Address", user.Address),
+                new("Photo", user.Photo ?? string.Empty),               
+            };
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["jwtKey"]!));
+            var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+
+            var expiration = DateTime.Now.AddMinutes(15);
+            var token = new JwtSecurityToken
+            (
+               issuer: null,
+               audience: null,
+               claims: claims,
+               expires: expiration,
+               signingCredentials: credentials
+            );
+
+            var refreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+
+            _context.RefreshTokens.Add(new RefreshToken
+            {
+                TokenHash = Hash(refreshToken),
+                UserId=user.Id,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+
+            });
+            return new TokenDTO
+            {
+                Token = new JwtSecurityTokenHandler().WriteToken(token),
+                Expiration = expiration,
+                RefreshToken = refreshToken,
+
+            };
+        }
+        private static string Hash(string token) =>
+          Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+        [HttpPost("Refresh")]
+        public async Task<IActionResult> RefreshAsync([FromBody] RefreshRequestDTO model)
+        {
+            var hash = Hash(model.RefreshToken);
+
+            var stored = await _context.RefreshTokens
+                .Include(r => r.User)
+                .FirstOrDefaultAsync(r => r.TokenHash == hash);
+
+            if (stored == null) return Unauthorized();            
+            if (stored.RevokedAt != null)
+            {
+                await RevokeAllUserTokensAsync(stored.UserId);
+                return Unauthorized();
+            }
+            if (stored.ExpiresAt <= DateTime.UtcNow) return Unauthorized();
+            if (!stored.User.EmailConfirmed) return Unauthorized();
+            if (stored.User.LockoutEnd != null && stored.User.LockoutEnd > DateTimeOffset.UtcNow)
+                return Unauthorized();
+
+            await using var tx = await _context.Database.BeginTransactionAsync();
+          
+            var rows = await _context.RefreshTokens
+                .Where(r => r.Id == stored.Id && r.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTime.UtcNow));
+
+            if (rows == 0) return Unauthorized(); 
+
+            var newToken = BuildToken(stored.User);       
+            stored.ReplacedByTokenHash = Hash(newToken.RefreshToken);
+
+            await _context.SaveChangesAsync();             
+            await tx.CommitAsync();
+
+            return Ok(newToken);
+        }
+        private async Task RevokeAllUserTokensAsync(string userId)
+        {
+            await _context.RefreshTokens
+                .Where(r => r.UserId == userId && r.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTime.UtcNow));
+        }
+        [HttpGet]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+        public async Task<IActionResult> GetAsync()
+        {
+            return Ok(await _usersUnitOfWork.GetUserAsync(User.Identity!.Name!));
+        }
+        [HttpPut]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+        public async Task<IActionResult> PutAsync(User user)
+        {
+            try
+            {
+                var currentUser = await _usersUnitOfWork.GetUserAsync(User.Identity!.Name!);
+                if (currentUser == null)
+                {
+                    return NotFound();
+                }
+                if (!string.IsNullOrEmpty(user.Photo))
+                {
+                    var photoUser = Convert.FromBase64String(user.Photo);
+                    user.Photo = await _fileStorage.SaveFileAsync(photoUser, ".jpg", "users");
+                }
+                currentUser.PhoneNumber = user.PhoneNumber;
+                currentUser.Email = user.Email;
+                currentUser.UserName = user.UserName;
+                currentUser.FirstName = user.FirstName;
+                currentUser.LastName = user.LastName;
+                currentUser.Address = user.Address;
+                currentUser.CountryCode = user.CountryCode;
+                currentUser.Photo = !string.IsNullOrEmpty(user.Photo) && user.Photo != currentUser.Photo ? user.Photo :
+                    currentUser.Photo;
+               
+
+                var result = await _usersUnitOfWork.UpdateUserAsync(currentUser);
+                if (result.Succeeded)
+                {
+                    var tokenDto = BuildToken(currentUser);
+                    await _context.SaveChangesAsync();
+                    return Ok(tokenDto);
+                }
+
+                return BadRequest(result.Errors.FirstOrDefault());
+            }
+            catch (Exception ex)
+            {
+
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPost("Logout")]
+        public async Task<IActionResult> LogoutAsync([FromBody] RefreshRequestDTO model)
+        {
+            var hash = Hash(model.RefreshToken);
+
+            var stored = await _context.RefreshTokens
+                .FirstOrDefaultAsync(r => r.TokenHash == hash);
+
+            if (stored != null && stored.RevokedAt == null)
+            {
+                stored.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+           
+            return NoContent();
+        }
+    }
+}

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CustomerPortal.Backend/CustomerPortal.Backend.csproj" />
+  <Project Path="CustomerPortal.Shared/CustomerPortal.Shared.csproj" Id="1fddc1c0-f63d-4b08-abd2-4d66a55cb489" />
+</Solution>

@@ -1,0 +1,13 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace CustomerPortal.Shared.DTOs
+{
+    public class TokenDTO
+    {
+        public string Token { get; set; } = null!;
+        public DateTime Expiration { get; set; }
+        public string RefreshToken { get; set; } = null!;
+    }
+}
