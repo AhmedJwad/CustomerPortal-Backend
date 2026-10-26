@@ -1,15 +1,11 @@
-<div align="center">
-
 # 🛍️ CustomerPortal Backend
 
 **A RESTful API built with ASP.NET Core 10, featuring JWT authentication, secure account management, and role-based access control.**
 
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![SQL Server](https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white)](https://www.microsoft.com/sql-server)
-[![JWT](https://img.shields.io/badge/Auth-JWT-000000?logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
-[![Status](https://img.shields.io/badge/Status-Live-success)](https://customerportal-backend.runasp.net)
-
-
+[![SQL Server](https://img.shields.io/badge/SQL%20Server-Database-CC2927?logo=microsoftsqlserver&logoColor=white)](https://www.microsoft.com/sql-server)
+[![JWT](https://img.shields.io/badge/JWT-Authentication-000000?logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
+[![API Status](https://img.shields.io/badge/API-Deployed-success)](https://customerportal-backend.runasp.net/)
 
 ---
 
