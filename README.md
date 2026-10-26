@@ -68,10 +68,12 @@ Short-lived access tokens help limit the period during which a stolen token can 
 
 
 
+## 👨‍💻 Author
+
 **Ahmed Jawad Kadhim**  
 Full-Stack Developer | ASP.NET Core & React
 
-- **GitHub:** [AhmedJwad](https://github.com/AhmedJwad)
+
 
 ---
 
