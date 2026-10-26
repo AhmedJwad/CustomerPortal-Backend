@@ -66,7 +66,7 @@ Short-lived access tokens help limit the period during which a stolen token can 
 - **Backend API:** [CustomerPortal Backend](https://customerportal-backend.runasp.net/)
 - **Frontend Application:** [CustomerPortal Frontend](https://customerportal.runasp.net/)
 
-## 👨‍💻 Author
+
 
 **Ahmed Jawad Kadhim**  
 Full-Stack Developer | ASP.NET Core & React
